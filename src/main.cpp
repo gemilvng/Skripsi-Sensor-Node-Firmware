@@ -19,5 +19,8 @@ void setup() {
 }
 
 void loop() {
-    vTaskDelay(500/portTICK_PERIOD_MS);
+    static uint32_t uptime_tick_count = 0;
+    uptime_tick_count++;
+    ESP_LOGI(TAG, "uptime_tick count=%u", uptime_tick_count);
+    vTaskDelay(1000/portTICK_PERIOD_MS);
 }
