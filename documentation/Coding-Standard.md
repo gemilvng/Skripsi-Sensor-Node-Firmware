@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document defines code style and language-subset rules for firmware development. The rules are project-agnostic — they apply to any ESP32 Arduino / ESP-IDF firmware in this author's work, not just one project — and are meant to be loaded as cross-session context by any AI assistant working on the codebase, so generated code matches hand-written code without reinventing conventions each session.
+This document defines code style and language-subset rules for this project's firmware. It is meant to be loaded as cross-session context by any AI assistant working on the codebase, so generated code matches hand-written code without reinventing conventions each session.
 
 Project-specific decisions — the runtime architecture, the role and configuration model, library-specific error-handling facts, and the project's logging shape — live in `documentation/Architecture.md`. Per-phase plan and implementation history live in `documentation/Implementation-Record.md`. This document references neither and should remain useful across firmware projects.
 
@@ -14,7 +14,7 @@ Project-specific decisions — the runtime architecture, the role and configurat
 **A module exposes only the entry points its callers actually need.** A module with no asynchronous behavior may have only `init_*`; one with periodic work also exposes `*_task`. Other entry points (getters, deinit, poll triggers) are added only when a concrete caller needs them.
 *Why:* a public API is a commitment; minimize it.
 
-**`init_*` functions return `bool` indicating success.** Callers gate dependent operations on this return value.
+**`init_*` functions return a value indicating success, and callers gate dependent operations on it.** The return type follows the wrapper return-type rule in Section 2: `bool` by default, a project-defined `enum class` only when callers need to distinguish failure modes.
 *Why:* makes inter-module dependencies explicit rather than implicit through call order.
 
 **Classes are written only when state, lifetime, and paired operations cluster naturally** — for example, an RAII wrapper around a FreeRTOS mutex's acquire and release. Singletons of which there is only one instance in the firmware are not wrapped in classes.

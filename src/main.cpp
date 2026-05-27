@@ -5,6 +5,9 @@
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <driver/uart.h>
+#include <Wire.h>
+
+#include "pmu.h"
 
 static const char* TAG = "Main";
 
@@ -15,12 +18,19 @@ void setup() {
         ESP_LOGI(TAG, "UART0 running at %u baud", baud);
     }
 
-    ESP_LOGI(TAG, "Logging from setup function.");
+    // I2C initialization
+    bool i2c_ok = Wire.begin(SDA, SCL);
+    if (!i2c_ok) {
+        ESP_LOGE(TAG, "i2c_init_failed bus=0 sda=%d scl=%d", SDA, SCL);
+        return;
+    }
+
+    // PMU initialization
+    bool pmu_ok = init_pmu();
+    if (!pmu_ok) {
+        ESP_LOGE(TAG, "pmu_init_failed_in_main");
+        return;
+    }
 }
 
-void loop() {
-    static uint32_t uptime_tick_count = 0;
-    uptime_tick_count++;
-    ESP_LOGI(TAG, "uptime_tick count=%u", uptime_tick_count);
-    vTaskDelay(1000/portTICK_PERIOD_MS);
-}
+void loop() {}

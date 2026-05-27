@@ -70,6 +70,7 @@ Implementation:
 - Observed cadence is ~1006 ms between log lines, not 1000 ms exactly. `vTaskDelay` waits a fixed interval *after* the loop body runs, so log-formatting and UART-write overhead add on top. Acceptable for Phase 1; switch to `vTaskDelayUntil` if drift-free cadence becomes a requirement.
 - Upload port shifted from COM5 (Phase 0) to COM4 (Phase 1) between runs. This is host-side USB-serial enumeration variance; `platformio.ini` does not pin a port and PlatformIO auto-detects each upload.
 - Soak: counter incremented from 1 to 134 contiguously over ~134 seconds — no gaps, no resets, no spontaneous boot-banner reappearance.
+- Phase 1 closes at commit `f1bd9c1`.
 
 ## Phase 2 — AXP2101 power-on for required rails
 
@@ -78,12 +79,21 @@ Bring up the power management chip so the LoRa radio (and any other peripheral t
 Feature needs:
 - The firmware talks to the AXP2101 over I2C at boot.
 - The rail that feeds the LoRa radio is enabled. Other rails that are not needed in this plan stay off.
-- Battery voltage and charging status are read and printed periodically on serial.
 
 Done when:
 - The AXP2101 responds and is configured without errors.
-- Battery voltage and charging status appear on serial and change sensibly when USB power is connected or removed.
 - The LoRa rail is on, which will be confirmed in the next phase.
+
+Implementation:
+- I2C bring-up lives in `main.cpp` (`Wire.begin(SDA, SCL)` in `setup()` after the Phase 0 UART verification, before `init_pmu()`), not inside the PMU module. Reason: the I2C bus is shared infrastructure that future phases will also use; module-local I2C ownership would not generalize.
+- I2C runs at 100 kHz, the Arduino I2C driver's default. `Wire.begin` is called without a frequency argument; the AXP2101 works correctly at this rate and no faster operation is needed. Boot log confirms: `Initialising I2C Master: sda=21 scl=22 freq=100000`.
+- The AXP2101 wrapper is a new module `src/pmu.cpp` + `src/pmu.h`, exposing one entry point `bool init_pmu()`. The held chip instance is `static XPowersPMU pmu;` — `static` for module-private internal linkage per `Coding-Standard.md` §1, `XPowersPMU` (the library's typedef) rather than the concrete `XPowersAXP2101` to follow the library's intended idiom and stay chip-portable.
+- Rail policy: DCDC1 (ESP32 SoC rail) is observed and locked via `setProtectedChannel(XPOWERS_DCDC1)` — voltage is not written, only protected against accidental disable. ALDO2 (SX1276 LoRa) is enabled at 3300 mV. ALDO3 (NEO-6M GPS) and the GPS coin-cell backup charger are explicitly disabled. Ten further rails — DC2–DC5, ALDO1, ALDO4, BLDO1–2, DLDO1–2 — are explicitly disabled. CPUSLDO is left at its reset state (the firmware does not touch it; no consumer needs it).
+- The `init_pmu()` bool has a deliberately narrow contract: it returns true iff `pmu.init()` succeeded — i.e., the AXP2101 responded on I2C. It does not verify that rail writes took effect, because XPowersLib's configuration setters return void. The header comment in `pmu.h` pins this meaning so callers cannot misread the bool as a configuration-success guarantee.
+- Library return values are captured into named `bool` locals before any conditional uses them; nothing reads an inline function return inside an `if`. This pattern is applied in both `pmu.cpp` and `main.cpp` (the `Wire.begin` guard and the `init_pmu()` guard).
+- A benign warning appears at boot: `[W][Wire.cpp:301] begin(): Bus already started in Master Mode.` XPowersLib's `XPowersCommon::begin()` (invoked by `pmu.init()`) calls `Wire.begin()` a second time. The Arduino `TwoWire::begin` checks `i2cIsInit(num)` on the HAL, sees the peripheral already installed (we initialized it from `main.cpp`), emits the warning, returns `true` as an idempotent no-op, and does not re-initialize the bus. No functional impact — subsequent I2C transactions succeed, proven by the AXP2101 acking and the rail logs that follow.
+- Periodic PMU telemetry (battery voltage, VBUS voltage, charging status) is intentionally not implemented in this phase. The original done-criterion phrasing "change sensibly when USB power is connected or removed" presumed a battery installed alongside USB; this project's power configuration is USB-only via a portable power bank, no 18650 in the battery holder. Without a battery the firmware dies on USB disconnect rather than producing an observable transition, so the dynamic test is not exercisable. Adding a periodic monitor task that emits constant values under USB-only power has no current consumer and was dropped. See *Deferred items* for the revisit condition.
+- Phase 2 closes at commit `<TBD>`.
 
 ## Phase 3 — LoRaMesher two-node hello
 
@@ -186,6 +196,7 @@ The following are not separate phases. They are revisited only when Phase 8 data
 - Application-layer recovery refinements. After Phase 8 resilience tests, decide whether the sink's buffering policy, retry intervals, or role demotion thresholds need adjustment.
 - GPS use. Not part of this plan. Revisit only if a future requirement introduces geotagging or absolute wall-clock timestamps.
 - Security. Not part of this plan. The mesh and the MQTT link run without encryption or authentication for the demo. Note this as a known limitation in any written report.
+- Power telemetry. Periodic emission of VBUS voltage, system voltage, battery-presence flag, and charging state from the AXP2101. Not added in Phase 2 because no current consumer acts on the readings and the project's USB-only power configuration leaves the dynamic-transition test unobservable. Revisit when Phase 8's resilience characterization needs the signal, or sooner if a battery-equipped configuration is introduced.
 
 ## Practical flags
 
