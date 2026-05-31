@@ -22,7 +22,7 @@ The current role is held in a single `std::atomic<Role> g_role`, written only by
 **All long-running tasks are created in `setup()` and declared in a single header `src/tasks.h`.** There are no `xTaskCreate` calls anywhere else in the codebase.
 *Why:* the task diagram is finite and drawable only if every task is visible in one place.
 
-**Inter-task communication uses FreeRTOS queues declared in `src/comms.h`.** Shared mutable globals are not used as a backchannel between tasks.
+**Inter-task communication uses FreeRTOS queues declared in `src/queues.h`.** Shared mutable globals are not used as a backchannel between tasks.
 *Why:* the queue set is the system's nervous system; making it implicit through globals breaks the timing and state diagrams.
 
 **Each task has exactly one trigger: either a periodic delay via `vTaskDelayUntil`, or a blocking queue read.** A mixed-trigger task must be justified in a comment at the top of its function.
@@ -63,7 +63,7 @@ This section complements `Coding-Standard.md` Section 2, which states the genera
 
 Each is checked at the call site it originates from. Internal helpers convert these to `bool` or early-returns before crossing module boundaries.
 
-**LoRaMesher is consumed through its `Builder` and a held `std::unique_ptr<LoraMesher>`.** **XPowersLib is consumed through an `XPowersAXP2101` instance held in module-scope state.** Both objects live as `static` variables inside their respective modules.
+**LoRaMesher is consumed through its `Builder` and a held `std::unique_ptr<LoraMesher>`.** **XPowersLib is consumed through an `XPowersPMU` instance held in module-scope state.** `XPowersPMU` is the library's chip-portable typedef; it resolves to the concrete `XPowersAXP2101` class because `pmu.cpp` defines `XPOWERS_CHIP_AXP2101` before including `XPowersLib.h`. The typedef is preferred over the concrete class so the holder declaration stays the same if a different chip is ever selected via that compile-time switch. Both objects live as `static` variables inside their respective modules.
 *Why:* the libraries decide their own API shape; the project follows it.
 
 ## Section 4 — Project-specific logging shape
