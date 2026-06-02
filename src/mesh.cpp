@@ -73,7 +73,9 @@ bool init_mesh() {
 
     loramesher::LoRaMeshProtocolConfig mesh_config;
     mesh_config.setMaxHops(MESH_MAX_HOPS);
-    ESP_LOGI(TAG, "mesh_config_built max_hops=%u", MESH_MAX_HOPS);
+    mesh_config.setMaxPacketSize(MESH_MAX_PACKET_SIZE);
+    ESP_LOGI(TAG, "mesh_config_built max_hops=%u max_packet_size=%u",
+             MESH_MAX_HOPS, MESH_MAX_PACKET_SIZE);
 
     loramesher::NodeRole mesh_role =
         (derived == MESH_MANAGER_ADDRESS)
@@ -147,6 +149,19 @@ void mesh_rx_task(void* /*pvParameters*/) {
         if (now_us - last_report_us >=
             static_cast<int64_t>(MESH_RX_REPORT_INTERVAL_MS) * 1000) {
             ESP_LOGI(TAG, "mesh_rx_stats count=%u", mesh_rx_count);
+            // Dump the routing table so multi-hop reachability is observable:
+            // for the route to the manager, next is the relay and hops>1 means
+            // the path is indirect (Phase 4 done-criteria #2 and #3). rssi/snr
+            // are the direct-neighbour link quality (0 = unknown / not a direct
+            // neighbour); they drive a walk test to find where a link drops out.
+            for (const loramesher::RouteEntry& route : mesher->GetRoutingTable()) {
+                ESP_LOGI(TAG,
+                         "mesh_route dst=0x%04x next=0x%04x hops=%u valid=%d "
+                         "mgr=%d rssi=%.1f snr=%.1f",
+                         route.destination, route.next_hop, route.hop_count,
+                         route.is_valid, route.is_network_manager,
+                         route.last_rssi, route.last_snr);
+            }
             last_report_us = now_us;
         }
     }
@@ -167,14 +182,19 @@ void mesh_tx_task(void* /*pvParameters*/) {
         loramesher::AddressType dst = 0;
         bool have_dst = false;
         for (const loramesher::RouteEntry& route : routes) {
-            if (route.is_valid && route.destination != self) {
+            // Destination = the network manager, learned dynamically (no
+            // hardcoded address). The manager's only manager-route is to
+            // itself, so the destination != self guard leaves the manager
+            // sending nothing.
+            if (route.is_valid && route.is_network_manager &&
+                route.destination != self) {
                 dst = route.destination;
                 have_dst = true;
                 break;
             }
         }
         if (!have_dst) {
-            continue;  // no peer yet; retry next slot
+            continue;  // manager route not learned yet; retry next slot
         }
 
         loramesher::Result ready = mesher->IsReadyToSend(dst);

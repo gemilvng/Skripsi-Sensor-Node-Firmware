@@ -34,6 +34,16 @@ constexpr uint16_t LORA_PREAMBLE_LENGTH = 8;
 // its in-class initializer (10); setMaxHops() is the documented mitigation.
 constexpr uint8_t MESH_MAX_HOPS = 5;
 
+// On-air frame size cap (header + payload), passed to setMaxPacketSize(). The
+// library otherwise defaults this to the SF7/BW125 max of 242 B and sizes both
+// the TDMA slot and the duty-cycle padding for that worst case, which inflates
+// the superframe to ~65 s. Our largest real frame (a routing-table update for
+// a few nodes) is well under 64 B, so capping here shrinks the slot and the
+// superframe (~65 s -> ~33 s) while keeping the 1% duty cycle for regulation.
+// Must stay above the largest frame the protocol sends; 64 B leaves margin for
+// the current node count. (See dev-resource/LoRaMesher-OSI-layer.md, Finding 2.)
+constexpr uint8_t MESH_MAX_PACKET_SIZE = 64;
+
 // Mesh-formation role is fixed by address match (not the library's default
 // AUTO election, which forms networks probabilistically across staggered
 // boots). The node whose hardware-derived address equals this becomes

@@ -123,7 +123,7 @@ Implementation:
 - Both app tasks are created in `setup()` (the only `xTaskCreate` calls in the codebase, per `Architecture.md` §1) at priority 2 — below every LoRaMesher internal task (LoRaMeshMain 3, SuperframeUpdate 14, RadioEvent 15) so the mesh always preempts our housekeeping — with 4096-byte stacks. Task entries are declared in `src/tasks.h`; inter-task queues in `src/queues.h` (renamed from the originally-planned `comms.h`).
 - Discovery/timing facts observed on hardware: the routing table is allocated with `max_nodes: 50`; a fresh node runs discovery for ~31–33.5 s (10 × 1000 ms slots × 3, plus per-node jitter seeded by address) listening continuously; once a node is `NETWORK_MANAGER` the superframe rescales to 100 × 650 ms (slot duration = ToA(242)=523 ms + 50 ms guard + margin) with ~1% TX duty cycle, beaconing once per ~65 s superframe.
 - Hardware verification (two boards, same binary, ~20 cm apart): `0x2510` boots straight to `NETWORK_MANAGER` (`mesh_role_selected ... is_manager=1`, role 0/creates network immediately, no discovery wait); `0x7ADC` boots `NODE_ONLY` (`is_manager=0`, role 2) and deterministically joins regardless of boot order. Both boards log `mesh_tx` to and `mesh_rx ... bytes=50494e47` ("PING") from each other, `mesh_rx_count` advancing in lockstep, zero `mesh_tx_failed`. Earlier `AUTO`-role runs reproduced the split-brain failure (each node forming its own network after the discovery timeout); the address-fixed roles eliminated it.
-- Phase 3 closes at commit `<pending>`.
+- Phase 3 closes at commit `e12dcb`.
 
 ## Phase 4 — LoRaMesher three-node relay
 
@@ -138,6 +138,11 @@ Done when:
 - A's transmission reaches C, observed in C's serial log.
 - The routing table on A shows C reachable through B with a hop count greater than one.
 - Powering B off causes A to lose its route to C. Powering B back on restores it.
+
+Status — **not yet met (relay not demonstrated).**
+- Firmware is in place: `mesh_tx_task` now addresses the network manager dynamically via `RouteEntry.is_network_manager` (no hardcoded destination, forward-compatible with the Phase 7 sink), and the periodic `mesh_route` dump emits per-route `hops`/`next`/`valid`/`mgr`/`rssi`/`snr` so the done-criteria are readable straight from the log. The stale `mesh.h` callback comment was corrected. Builds clean; not committed pending a passing hardware demo.
+- First hardware attempt (2026-06-02, semi-indoor "L" layout, three nodes ~7.5 m per leg, manager 0x2510 at one end) did not isolate the two ends: A heard C directly at ≈ −81 dBm / +10 dB SNR, so every routing dump showed `dst=0x7adc next=0x7adc hops=1` — never via B. Criterion #2 fails, criterion #1 is a direct delivery rather than a relay, and criterion #3 is therefore not exercisable. Run was otherwise healthy (zero errors, manager correctly silent on TX). Full analysis in `dev-resource/Phase-4-Experiment-Report.md`.
+- Cause: a single interior wall added only ≈ 15 dB; isolating the A–C link (driving it below the −123 dBm sensitivity floor) needs ≈ 42 dB more. The link-budget extrapolation in the report predicts 90–200 m rooftop hops close with ≥ 31 dB margin, so the phase is expected to pass at outdoor inter-building scale where distance and building obstruction provide the isolation indoor walls could not. Phase 4 remains open until a run demonstrates `hops > 1` with relay through B; no phase-boundary commit yet.
 
 ## Phase 5 — Sensor bring-up
 
