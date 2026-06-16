@@ -12,3 +12,7 @@ void mesh_rx_task(void* pvParameters);
 // Sends this node's self-identifying payload ("Data from 0x<addr>") to the
 // manager once per data slot.
 void mesh_tx_task(void* pvParameters);
+
+// Reads the ESP32 internal die temperature every SENSOR_SAMPLE_INTERVAL_MS and
+// logs it.
+void sensor_sample_task(void* pvParameters);

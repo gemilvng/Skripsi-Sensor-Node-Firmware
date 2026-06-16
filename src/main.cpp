@@ -9,6 +9,7 @@
 
 #include "pmu.h"
 #include "mesh.h"
+#include "sensor.h"
 #include "config.h"
 #include "tasks.h"
 
@@ -42,6 +43,13 @@ void setup() {
         return;
     }
 
+    // Sensor initialization
+    bool sensor_ok = init_sensor();
+    if (!sensor_ok) {
+        ESP_LOGE(TAG, "sensor_init_failed_in_main");
+        return;
+    }
+
     // Mesh receive/transmit tasks. All xTaskCreate calls live here in setup()
     // (Architecture.md §1); the queue they use is created inside init_mesh().
     BaseType_t rx_created =
@@ -57,6 +65,14 @@ void setup() {
                     MESH_APP_TASK_PRIORITY, nullptr);
     if (tx_created != pdPASS) {
         ESP_LOGE(TAG, "mesh_tx_task_create_failed");
+        return;
+    }
+
+    BaseType_t sensor_created =
+        xTaskCreate(sensor_sample_task, "sensor", SENSOR_SAMPLE_TASK_STACK,
+                    nullptr, SENSOR_SAMPLE_TASK_PRIORITY, nullptr);
+    if (sensor_created != pdPASS) {
+        ESP_LOGE(TAG, "sensor_sample_task_create_failed");
         return;
     }
 }

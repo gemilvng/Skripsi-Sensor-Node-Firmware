@@ -82,3 +82,17 @@ constexpr const char* MESH_PAYLOAD_FORMAT = "Data from 0x%04x";
 // Arduino loopTask (1). One shared pair: both app tasks use the same values.
 constexpr uint32_t MESH_APP_TASK_STACK = 4096;
 constexpr uint8_t MESH_APP_TASK_PRIORITY = 2;
+
+// Sensor sampling. The ESP32 internal die-temperature sensor is read on this
+// cadence. 30 s matches the ~33 s mesh superframe (so the value is at most one
+// send-period stale when it feeds the Phase 6 packet) and the existing
+// MESH_RX_REPORT_INTERVAL_MS heartbeat. The die signal moves over tens of
+// seconds and the reading is coarse (int8 / +-several degC), so faster sampling
+// adds no information; >60 s would miss thermal trends.
+constexpr uint32_t SENSOR_SAMPLE_INTERVAL_MS = 30000;
+
+// sensor_sample_task is housekeeping of the same class as the mesh app tasks:
+// same priority (below every LoRaMesher internal task so the mesh always
+// preempts), expressed by reference so the derivation is explicit.
+constexpr uint8_t SENSOR_SAMPLE_TASK_PRIORITY = MESH_APP_TASK_PRIORITY;  // = 2
+constexpr uint32_t SENSOR_SAMPLE_TASK_STACK = MESH_APP_TASK_STACK;       // = 4096
