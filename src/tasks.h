@@ -9,5 +9,6 @@
 // Drains rx_queue, logs each received payload, reports mesh_rx_count.
 void mesh_rx_task(void* pvParameters);
 
-// Sends MESH_HELLO_PAYLOAD to the first reachable peer once per data slot.
+// Sends this node's self-identifying payload ("Data from 0x<addr>") to the
+// manager once per data slot.
 void mesh_tx_task(void* pvParameters);

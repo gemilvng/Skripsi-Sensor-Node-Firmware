@@ -1,7 +1,6 @@
 // config.h
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include "types/configurations/radio_configuration.hpp"
@@ -24,7 +23,7 @@ constexpr float LORA_FREQUENCY_MHZ = 921.200F;
 constexpr uint8_t LORA_SPREADING_FACTOR = 7;
 constexpr float LORA_BANDWIDTH_KHZ = 125.0F;
 constexpr uint8_t LORA_CODING_RATE = 7;
-constexpr int8_t LORA_POWER_DBM = 6;
+constexpr int8_t LORA_POWER_DBM = 17;
 constexpr uint8_t LORA_SYNC_WORD = 20;
 constexpr bool LORA_CRC_ENABLED = true;
 constexpr uint16_t LORA_PREAMBLE_LENGTH = 8;
@@ -69,9 +68,14 @@ constexpr uint32_t MESH_RX_REPORT_INTERVAL_MS = 30000;
 // it falls back to this fixed delay before retrying.
 constexpr uint32_t MESH_TX_FALLBACK_DELAY_MS = 10000;
 
-// Fixed Phase-3 test payload, sent each data slot. Spells "PING"; replaced by
-// an encoded sensor reading at Phase 6.
-constexpr std::array<uint8_t, 4> MESH_HELLO_PAYLOAD = {0x50, 0x49, 0x4E, 0x47};
+// Per-node data payload, sent each data slot. Formatted once at init with this
+// board's own address so every node emits a unique, self-identifying frame,
+// e.g. "Data from 0x49cc" (16 bytes for a 4-hex address). The manager already
+// logs the originator via src=, but a self-describing payload makes each frame
+// distinguishable in payload/packet captures. Replaced by an encoded sensor
+// reading at Phase 6. 16 B payload + ~10 B DATA header = 26 B on air, well
+// under MESH_MAX_PACKET_SIZE (64), so no slot/packet-size change is needed.
+constexpr const char* MESH_PAYLOAD_FORMAT = "Data from 0x%04x";
 
 // App task scheduling. Priority 2 sits below every LoRaMesher internal task
 // (3/14/15) so the mesh always preempts our housekeeping, and above the

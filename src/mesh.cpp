@@ -25,9 +25,10 @@ static std::unique_ptr<loramesher::LoraMesher> mesher;
 // Defined here, declared extern in queues.h.
 QueueHandle_t rx_queue = nullptr;
 
-// Fixed hello payload, built once from MESH_HELLO_PAYLOAD in init_mesh() so
-// mesh_tx_task can pass it to Send() by const reference without allocating on
-// each iteration (Coding-Standard.md §1: no heap in task code).
+// Per-node data payload, built once in init_mesh() from MESH_PAYLOAD_FORMAT and
+// this board's own address (e.g. "Data from 0x49cc"), so mesh_tx_task can pass
+// it to Send() by const reference without allocating on each iteration
+// (Coding-Standard.md §1: no heap in task code).
 static std::vector<uint8_t> hello_payload;
 
 // LoRaMesher receive callback. Runs in the protocol task context: it only
@@ -94,9 +95,18 @@ bool init_mesh() {
     ESP_LOGI(TAG, "rx_queue_created depth=%u item_bytes=%u", RX_QUEUE_DEPTH,
              static_cast<unsigned>(sizeof(MeshRxItem)));
 
-    hello_payload.assign(MESH_HELLO_PAYLOAD.begin(), MESH_HELLO_PAYLOAD.end());
-    ESP_LOGI(TAG, "hello_payload_built len=%u",
-             static_cast<unsigned>(hello_payload.size()));
+    // Format the self-identifying payload from this board's own address. Sized
+    // for "Data from 0x" + 4 hex digits + NUL; only the printed length (no NUL)
+    // is sent. snprintf truncates rather than overflows if the format ever grows.
+    char payload_buf[24];
+    int payload_len = snprintf(payload_buf, sizeof(payload_buf),
+                               MESH_PAYLOAD_FORMAT, static_cast<unsigned>(derived));
+    if (payload_len < 0 || payload_len >= static_cast<int>(sizeof(payload_buf))) {
+        payload_len = static_cast<int>(sizeof(payload_buf)) - 1;  // clamp on truncation
+    }
+    hello_payload.assign(payload_buf, payload_buf + payload_len);
+    ESP_LOGI(TAG, "hello_payload_built len=%u text=\"%s\"",
+             static_cast<unsigned>(hello_payload.size()), payload_buf);
 
     mesher = loramesher::LoraMesher::Builder()
                  .withPinConfig(pin_config)
