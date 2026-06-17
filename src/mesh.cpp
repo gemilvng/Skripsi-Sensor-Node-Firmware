@@ -16,7 +16,9 @@
 
 #include "config.h"
 #include "queues.h"
+#include "sensor.h"
 #include "tasks.h"
+#include "telemetry.h"
 
 static const char* TAG = "Mesh";
 
@@ -24,12 +26,6 @@ static std::unique_ptr<loramesher::LoraMesher> mesher;
 
 // Defined here, declared extern in queues.h.
 QueueHandle_t rx_queue = nullptr;
-
-// Per-node data payload, built once in init_mesh() from MESH_PAYLOAD_FORMAT and
-// this board's own address (e.g. "Data from 0x49cc"), so mesh_tx_task can pass
-// it to Send() by const reference without allocating on each iteration
-// (Coding-Standard.md §1: no heap in task code).
-static std::vector<uint8_t> hello_payload;
 
 // LoRaMesher receive callback. Runs in the protocol task context: it only
 // copies the payload into a by-value POD and enqueues it, then returns. No
@@ -95,19 +91,6 @@ bool init_mesh() {
     ESP_LOGI(TAG, "rx_queue_created depth=%u item_bytes=%u", RX_QUEUE_DEPTH,
              static_cast<unsigned>(sizeof(MeshRxItem)));
 
-    // Format the self-identifying payload from this board's own address. Sized
-    // for "Data from 0x" + 4 hex digits + NUL; only the printed length (no NUL)
-    // is sent. snprintf truncates rather than overflows if the format ever grows.
-    char payload_buf[24];
-    int payload_len = snprintf(payload_buf, sizeof(payload_buf),
-                               MESH_PAYLOAD_FORMAT, static_cast<unsigned>(derived));
-    if (payload_len < 0 || payload_len >= static_cast<int>(sizeof(payload_buf))) {
-        payload_len = static_cast<int>(sizeof(payload_buf)) - 1;  // clamp on truncation
-    }
-    hello_payload.assign(payload_buf, payload_buf + payload_len);
-    ESP_LOGI(TAG, "hello_payload_built len=%u text=\"%s\"",
-             static_cast<unsigned>(hello_payload.size()), payload_buf);
-
     mesher = loramesher::LoraMesher::Builder()
                  .withPinConfig(pin_config)
                  .withRadioConfig(radio_config)
@@ -143,15 +126,42 @@ void mesh_rx_task(void* /*pvParameters*/) {
         BaseType_t got = xQueueReceive(rx_queue, &item,
                                        pdMS_TO_TICKS(MESH_RX_REPORT_INTERVAL_MS));
         if (got == pdTRUE) {
-            char hex[MESH_MAX_PAYLOAD_BYTES * 2 + 1];
-            size_t pos = 0;
-            for (uint8_t i = 0; i < item.len; ++i) {
-                pos += snprintf(hex + pos, sizeof(hex) - pos, "%02x",
-                                item.bytes[i]);
+            // Parse the combined telemetry + routing-table payload in place
+            // (zero-copy: the fields are read straight out of item.bytes, no
+            // allocation, no intermediate buffer). One summary line carries the
+            // telemetry and route count; each route entry the sender reported is
+            // then printed so the manager's serial log shows every node's routing
+            // table — the topology view. A frame that fails validation (wrong
+            // length / not telemetry) is dumped as raw hex instead of misread.
+            TelemetryHeader hdr;
+            if (telemetry_parse_header(item.bytes, item.len, hdr)) {
+                ESP_LOGI(TAG,
+                         "mesh_rx src=0x%04x seq=%u ts_ms=%u temp_c=%d routes=%u",
+                         item.src, hdr.seq, hdr.timestamp_ms, hdr.chip_temp_c,
+                         hdr.entry_count);
+                for (uint8_t i = 0; i < hdr.entry_count; ++i) {
+                    TelemetryRouteEntry entry;
+                    telemetry_parse_route_entry(item.bytes, i, entry);
+                    ESP_LOGI(TAG,
+                             "mesh_route_report src=0x%04x dst=0x%04x "
+                             "next=0x%04x hops=%u valid=%u mgr=%u",
+                             item.src, entry.destination, entry.next_hop,
+                             entry.hop_count,
+                             (entry.flags & TELEMETRY_ROUTE_FLAG_VALID) ? 1 : 0,
+                             (entry.flags & TELEMETRY_ROUTE_FLAG_MANAGER) ? 1
+                                                                          : 0);
+                }
+            } else {
+                char hex[MESH_MAX_PAYLOAD_BYTES * 2 + 1];
+                size_t pos = 0;
+                for (uint8_t i = 0; i < item.len; ++i) {
+                    pos += snprintf(hex + pos, sizeof(hex) - pos, "%02x",
+                                    item.bytes[i]);
+                }
+                hex[pos] = '\0';
+                ESP_LOGW(TAG, "mesh_rx_malformed src=0x%04x len=%u bytes=%s",
+                         item.src, item.len, hex);
             }
-            hex[pos] = '\0';
-            ESP_LOGI(TAG, "mesh_rx src=0x%04x len=%u bytes=%s", item.src,
-                     item.len, hex);
             mesh_rx_count++;
         }
 
@@ -182,6 +192,16 @@ void mesh_rx_task(void* /*pvParameters*/) {
 // valid non-self route in the table. Not vTaskDelayUntil because the slot
 // cadence is set at runtime by the mesh scheduler, not a fixed period.
 void mesh_tx_task(void* /*pvParameters*/) {
+    // Per-node send counter. 32 bits internally so reboot detection stays
+    // unambiguous; only the low 16 bits ride the wire (packet-structure.md §3).
+    // Incremented only after a successful send, so a retried slot reuses the same
+    // seq and the receiver sees a contiguous, gap-free sequence.
+    static uint32_t tx_seq = 0;
+    // Pre-sized to the largest combined payload so the per-iteration assign
+    // overwrites bytes in place (no realloc, no heap in the task —
+    // Coding-Standard.md §1); Send() takes it by const reference.
+    static std::vector<uint8_t> tx_payload(TELEMETRY_MAX_PAYLOAD_BYTES);
+
     for (;;) {
         uint32_t wait_ms = mesher->GetTimeUntilNextDataSlot();
         vTaskDelay(pdMS_TO_TICKS(wait_ms > 0 ? wait_ms
@@ -215,10 +235,60 @@ void mesh_tx_task(void* /*pvParameters*/) {
             continue;
         }
 
-        loramesher::Result send_result = mesher->Send(dst, hello_payload);
+        // Build the combined telemetry + routing-table payload at send time
+        // (dev-resource/routing-table-reporting.md §4): the telemetry header
+        // (current seq, a fresh boot-relative timestamp, the latest published
+        // chip-temperature sample), followed by this node's own routing table so
+        // the manager can reconstruct the mesh topology. `routes` is the table
+        // already fetched above for destination selection. Packed into a stack
+        // buffer, then assigned into the pre-sized tx_payload so Send() adds no
+        // heap.
+        uint8_t buf[TELEMETRY_MAX_PAYLOAD_BYTES];
+
+        uint8_t entry_count = 0;
+        for (const loramesher::RouteEntry& route : routes) {
+            if (route.destination == self) {
+                continue;  // skip self: the manager already learns our address
+            }
+            if (entry_count >= TELEMETRY_MAX_ROUTE_ENTRIES) {
+                break;  // stay within the 64 B frame cap
+            }
+            TelemetryRouteEntry entry;
+            entry.destination = route.destination;
+            entry.next_hop = route.next_hop;
+            entry.hop_count = route.hop_count;
+            entry.flags = 0;
+            if (route.is_valid) {
+                entry.flags |= TELEMETRY_ROUTE_FLAG_VALID;
+            }
+            if (route.is_network_manager) {
+                entry.flags |= TELEMETRY_ROUTE_FLAG_MANAGER;
+            }
+            telemetry_pack_route_entry(
+                entry, buf + TELEMETRY_HEADER_BYTES +
+                           entry_count * TELEMETRY_ROUTE_ENTRY_BYTES);
+            entry_count++;
+        }
+
+        TelemetryHeader hdr;
+        hdr.seq = static_cast<uint16_t>(tx_seq & 0xFFFF);
+        hdr.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+        hdr.chip_temp_c = sensor_latest_chip_temp_c();
+        hdr.entry_count = entry_count;
+        telemetry_pack_header(hdr, buf);
+
+        size_t payload_len =
+            TELEMETRY_HEADER_BYTES +
+            static_cast<size_t>(entry_count) * TELEMETRY_ROUTE_ENTRY_BYTES;
+        tx_payload.assign(buf, buf + payload_len);
+
+        loramesher::Result send_result = mesher->Send(dst, tx_payload);
         if (send_result) {
-            ESP_LOGI(TAG, "mesh_tx dst=0x%04x len=%u", dst,
-                     static_cast<unsigned>(hello_payload.size()));
+            ESP_LOGI(TAG,
+                     "mesh_tx dst=0x%04x seq=%u temp_c=%d routes=%u len=%u", dst,
+                     hdr.seq, hdr.chip_temp_c, entry_count,
+                     static_cast<unsigned>(tx_payload.size()));
+            tx_seq++;
         } else {
             ESP_LOGE(TAG, "mesh_tx_failed dst=0x%04x reason=%s", dst,
                      send_result.GetErrorMessage().c_str());

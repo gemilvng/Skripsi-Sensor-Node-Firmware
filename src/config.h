@@ -68,14 +68,13 @@ constexpr uint32_t MESH_RX_REPORT_INTERVAL_MS = 30000;
 // it falls back to this fixed delay before retrying.
 constexpr uint32_t MESH_TX_FALLBACK_DELAY_MS = 10000;
 
-// Per-node data payload, sent each data slot. Formatted once at init with this
-// board's own address so every node emits a unique, self-identifying frame,
-// e.g. "Data from 0x49cc" (16 bytes for a 4-hex address). The manager already
-// logs the originator via src=, but a self-describing payload makes each frame
-// distinguishable in payload/packet captures. Replaced by an encoded sensor
-// reading at Phase 6. 16 B payload + ~10 B DATA header = 26 B on air, well
-// under MESH_MAX_PACKET_SIZE (64), so no slot/packet-size change is needed.
-constexpr const char* MESH_PAYLOAD_FORMAT = "Data from 0x%04x";
+// Per-node data payload, sent each data slot, is the 7-byte little-endian
+// telemetry packet (seq, timestamp, chip_temp) defined in telemetry.h and built
+// in mesh_tx_task; see dev-resource/packet-structure.md. 7 B payload + ~10 B
+// DATA header = ~17 B on air, well under MESH_MAX_PACKET_SIZE (64). This
+// replaced the Phase 3 self-identifying string "Data from 0x%04x": the source
+// address that string carried is already delivered out-of-band as the receive
+// callback's source argument, so the packet spends no bytes repeating it.
 
 // App task scheduling. Priority 2 sits below every LoRaMesher internal task
 // (3/14/15) so the mesh always preempts our housekeeping, and above the
